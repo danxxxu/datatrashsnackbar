@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Backend Dashboard</title>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #050505;
+    --panel: #0f0f0f;
+    --border: #1e1e1e;
+    --border-bright: #333;
+    --text: #e0e0e0;
+    --muted: #555;
+    --accent: #00ff9d;
+    --accent-dim: rgba(0,255,157,0.07);
+    --accent-mid: rgba(0,255,157,0.2);
+    --warn: #ff6b35;
+    --warn-dim: rgba(255,107,53,0.1);
+    --red: #ff3b3b;
+  }
+
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  /* Scanline overlay */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,0.03) 2px,
+      rgba(0,0,0,0.03) 4px
+    );
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  /* ── LAYOUT ── */
+  #layout {
+    display: grid;
+    grid-template-rows: 52px 1fr;
+    grid-template-columns: 1fr 340px;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* ── HEADER ── */
+  header {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+    border-bottom: 1px solid var(--border);
+    gap: 20px;
+  }
+
+  .header-logo {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    color: var(--accent);
+    text-transform: uppercase;
+  }
+
+  .header-sep { flex: 1; }
+
+  .stat {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .stat-val {
+    color: var(--text);
+    font-weight: 700;
+  }
+
+  .dot-live {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 6px var(--accent);
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  #conn-indicator { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
+  #conn-indicator.ok { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+
+  /* ── MAIN PANEL ── */
+  main {
+    padding: 20px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    border-right: 1px solid var(--border);
+  }
+
+  /* ── SIDEBAR ── */
+  aside {
+    padding: 16px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  /* ── CARDS ── */
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 16px;
+  }
+
+  .card-label {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.2em;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 12px;
+  }
+
+  /* ── PROMPT COMPOSER ── */
+  #prompt-composer textarea {
+    width: 100%;
+    background: transparent;
+    border: 1px solid var(--border-bright);
+    border-radius: 3px;
+    color: var(--text);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 16px;
+    line-height: 1.5;
+    padding: 12px 14px;
+    resize: none;
+    outline: none;
+    min-height: 90px;
+    transition: border-color 0.2s;
+  }
+  #prompt-composer textarea:focus { border-color: var(--accent); }
+  #prompt-composer textarea::placeholder { color: var(--muted); }
+
+  .btn-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  .btn {
+    border: none;
+    border-radius: 3px;
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 10px 16px;
+    cursor: pointer;
+    transition: opacity 0.15s, transform 0.1s;
+    flex: 1;
+  }
+  .btn:active { transform: scale(0.97); opacity: 0.8; }
+  .btn:disabled { opacity: 0.3; cursor: default; }
+
+  .btn-send {
+    background: var(--accent);
+    color: #000;
+  }
+
+  .btn-close {
+    background: transparent;
+    border: 1px solid var(--warn);
+    color: var(--warn);
+    flex: 0 0 auto;
+  }
+
+  .btn-danger {
+    background: transparent;
+    border: 1px solid var(--border-bright);
+    color: var(--muted);
+    font-size: 10px;
+    padding: 7px 12px;
+  }
+
+  .btn-download {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 9px;
+    padding: 5px 10px;
+    cursor: pointer;
+    font-family: 'Space Mono', monospace;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    margin-top: 8px;
+    align-self: flex-end;
+  }
+  .btn-download:hover {
+    color: var(--text);
+    border-color: var(--border-bright);
+  }
+
+  /* ── ACTIVE PROMPT DISPLAY ── */
+  #active-prompt-display {
+    border-left: 3px solid var(--accent);
+    background: var(--accent-dim);
+    padding: 12px 14px;
+    border-radius: 0 3px 3px 0;
+    font-size: 15px;
+    line-height: 1.5;
+    color: var(--text);
+    display: none;
+  }
+  #active-prompt-display.visible { display: block; }
+
+  .inactive-notice {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+    padding: 10px 0;
+  }
+
+  /* ── RESPONSES FEED ── */
+  #responses-feed {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+  }
+
+  .feed-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 4px;
+  }
+
+  .response-item {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 12px 14px;
+    animation: slideIn 0.3s ease both;
+  }
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateX(-8px); }
+    to   { opacity: 1; transform: translateX(0); }
+  }
+
+  .response-meta {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 6px;
+  }
+
+  .response-id {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: var(--accent);
+  }
+
+  .response-time {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: var(--muted);
+  }
+
+  .response-prompt-ref {
+    font-size: 11px;
+    color: var(--muted);
+    font-style: italic;
+    margin-bottom: 6px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .response-body {
+    font-size: 15px;
+    color: var(--text);
+    line-height: 1.5;
+    word-break: break-word;
+  }
+
+  .empty-state {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+    text-align: center;
+    padding: 40px 0;
+  }
+
+  /* ── STATS PANEL ── */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  .stat-box {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 12px;
+    text-align: center;
+  }
+
+  .stat-box-val {
+    font-family: 'Space Mono', monospace;
+    font-size: 26px;
+    font-weight: 700;
+    color: var(--accent);
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+
+  .stat-box-label {
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  /* ── QUICK PROMPTS ── */
+  .quick-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .quick-item {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--text);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+    padding: 8px 12px;
+    cursor: pointer;
+    text-align: left;
+    transition: border-color 0.15s, background 0.15s;
+    line-height: 1.4;
+  }
+  .quick-item:hover {
+    border-color: var(--accent);
+    background: var(--accent-dim);
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 2px; }
+</style>
+</head>
+<body>
+<div id="layout">
+
+  <!-- HEADER -->
+  <header>
+    <div class="header-logo">◈ Performance Dashboard</div>
+    <div class="header-sep"></div>
+    <div class="stat">
+      <div id="conn-indicator"></div>
+      <span id="conn-label">Connecting…</span>
+    </div>
+    <div class="stat" style="margin-left:16px">
+      <div class="dot-live"></div>
+      <span>Audience:</span>
+      <span class="stat-val" id="hdr-participants">0</span>
+    </div>
+    <div class="stat" style="margin-left:16px">
+      <span>Responses:</span>
+      <span class="stat-val" id="hdr-responses">0</span>
+    </div>
+  </header>
+
+  <!-- MAIN -->
+  <main>
+
+    <!-- PROMPT COMPOSER -->
+    <div class="card" id="prompt-composer">
+      <div class="card-label">Send Prompt to Audience</div>
+      <textarea id="prompt-input" placeholder="Type a question or instruction for the audience…" rows="3"></textarea>
+      <div class="btn-row">
+        <button class="btn btn-send" id="send-btn" onclick="sendPrompt()">→ Broadcast</button>
+        <button class="btn btn-close" id="close-btn" onclick="closePrompt()" disabled>✕ Close</button>
+      </div>
+    </div>
+
+    <!-- ACTIVE PROMPT -->
+    <div class="card">
+      <div class="card-label">Active Prompt</div>
+      <div id="active-prompt-display"></div>
+      <div class="inactive-notice" id="no-prompt-notice">No active prompt. Broadcast one above.</div>
+    </div>
+
+    <!-- RESPONSES FEED -->
+    <div class="card" style="flex:1; display:flex; flex-direction:column; min-height:200px;">
+      <div class="feed-header">
+        <div class="card-label" style="margin-bottom:0">Live Responses</div>
+        <button class="btn btn-danger" onclick="clearResponses()">Clear all</button>
+      </div>
+      <div id="responses-feed">
+        <div class="empty-state" id="empty-state">Responses will appear here in real time.</div>
+      </div>
+      <button class="btn-download" onclick="downloadResponses()">↓ Download .txt</button>
+    </div>
+
+  </main>
+
+  <!-- SIDEBAR -->
+  <aside>
+
+    <!-- STATS -->
+    <div class="card">
+      <div class="card-label">Session Stats</div>
+      <div class="stats-grid">
+        <div class="stat-box">
+          <div class="stat-box-val" id="stat-participants">0</div>
+          <div class="stat-box-label">Online</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-box-val" id="stat-responses">0</div>
+          <div class="stat-box-label">Responses</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-box-val" id="stat-prompts">0</div>
+          <div class="stat-box-label">Prompts Sent</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-box-val" id="stat-rate">—</div>
+          <div class="stat-box-label">Resp/Prompt</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- QUICK PROMPTS -->
+    <div class="card">
+      <div class="card-label">Quick Prompts</div>
+      <div class="quick-list" id="quick-list"></div>
+    </div>
+
+  </aside>
+
+</div>
+
+<script>
+  const socket = io(window.location.origin, { query: { role: 'artist' } });
+
+  // State
+  let participants = 0;
+  let totalResponses = 0;
+  let totalPrompts = 0;
+  let activePrompt = null;
+  let allResponses = [];
+
+  const quickPrompts = [
+    'What sound does this moment make?',
+    'Describe a color you feel right now.',
+    'Name something you left behind today.',
+    'Finish this: "I want to…"',
+    'What are you afraid to say out loud?',
+    'Give me one word. Just one.',
+  ];
+
+  // Build quick prompts
+  const ql = document.getElementById('quick-list');
+  quickPrompts.forEach(p => {
+    const btn = document.createElement('button');
+    btn.className = 'quick-item';
+    btn.textContent = p;
+    btn.onclick = () => {
+      document.getElementById('prompt-input').value = p;
+      document.getElementById('prompt-input').focus();
+    };
+    ql.appendChild(btn);
+  });
+
+  // Connection
+  const connDot = document.getElementById('conn-indicator');
+  const connLabel = document.getElementById('conn-label');
+  socket.on('connect', () => {
+    connDot.className = 'ok';
+    connLabel.textContent = 'Connected';
+  });
+  socket.on('disconnect', () => {
+    connDot.className = '';
+    connLabel.textContent = 'Disconnected';
+  });
+
+  // Initial state from server
+  socket.on('state', ({ currentPrompt, responses, participantCount }) => {
+    participants = participantCount;
+    totalResponses = responses.length;
+    totalPrompts = currentPrompt.id;
+    updateCounts();
+
+    if (currentPrompt.active) setActivePrompt(currentPrompt);
+
+    allResponses = responses.slice();
+    // Render existing responses newest-first
+    responses.slice().reverse().forEach(r => addResponseItem(r, true));
+    if (responses.length) document.getElementById('empty-state').remove();
+  });
+
+  // Participant count
+  socket.on('participant_count', (count) => {
+    participants = count;
+    updateCounts();
+  });
+
+  // Prompt confirmed
+  socket.on('prompt_updated', (prompt) => {
+    totalPrompts = prompt.id;
+    if (prompt.active) {
+      setActivePrompt(prompt);
+    } else {
+      clearActivePrompt();
+    }
+    updateCounts();
+  });
+
+  // New response
+  socket.on('new_response', (entry) => {
+    allResponses.push(entry);
+    totalResponses++;
+    updateCounts();
+    const emptyEl = document.getElementById('empty-state');
+    if (emptyEl) emptyEl.remove();
+    addResponseItem(entry, false);
+  });
+
+  // Responses cleared
+  socket.on('responses_cleared', () => {
+    allResponses = [];
+    totalResponses = 0;
+    updateCounts();
+    document.getElementById('responses-feed').innerHTML =
+      '<div class="empty-state" id="empty-state">Responses will appear here in real time.</div>';
+  });
+
+  function setActivePrompt(prompt) {
+    activePrompt = prompt;
+    const el = document.getElementById('active-prompt-display');
+    el.textContent = prompt.text;
+    el.classList.add('visible');
+    document.getElementById('no-prompt-notice').style.display = 'none';
+    document.getElementById('close-btn').disabled = false;
+  }
+
+  function clearActivePrompt() {
+    activePrompt = null;
+    document.getElementById('active-prompt-display').classList.remove('visible');
+    document.getElementById('no-prompt-notice').style.display = '';
+    document.getElementById('close-btn').disabled = true;
+  }
+
+  function addResponseItem(entry, prepend = false) {
+    const feed = document.getElementById('responses-feed');
+    const time = new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    const div = document.createElement('div');
+    div.className = 'response-item';
+    div.innerHTML = `
+      <div class="response-meta">
+        <span class="response-id">#${entry.participantId}</span>
+        <span class="response-time">${time}</span>
+      </div>
+      <div class="response-prompt-ref">re: ${escHtml(entry.promptText)}</div>
+      <div class="response-body">${escHtml(entry.response)}</div>
+    `;
+
+    if (prepend) {
+      feed.appendChild(div);
+    } else {
+      feed.insertBefore(div, feed.firstChild);
+    }
+  }
+
+  function updateCounts() {
+    document.getElementById('stat-participants').textContent = participants;
+    document.getElementById('stat-responses').textContent = totalResponses;
+    document.getElementById('stat-prompts').textContent = totalPrompts;
+    document.getElementById('stat-rate').textContent =
+      totalPrompts > 0 ? (totalResponses / totalPrompts).toFixed(1) : '—';
+    document.getElementById('hdr-participants').textContent = participants;
+    document.getElementById('hdr-responses').textContent = totalResponses;
+  }
+
+  function sendPrompt() {
+    const text = document.getElementById('prompt-input').value.trim();
+    if (!text) return;
+    socket.emit('send_prompt', text);
+    document.getElementById('prompt-input').value = '';
+  }
+
+  function closePrompt() {
+    socket.emit('close_prompt');
+  }
+
+  function clearResponses() {
+    if (confirm('Clear all responses? This cannot be undone.')) {
+      socket.emit('clear_responses');
+    }
+  }
+
+  document.getElementById('prompt-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) sendPrompt();
+  });
+
+  function downloadResponses() {
+    if (!allResponses.length) {
+      alert('No responses to download.');
+      return;
+    }
+    const txt = allResponses.map(r => r.response).join('\n');
+    const blob = new Blob([txt], { type: 'text/plain' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `responses_${new Date().toISOString().slice(0, 10)}.txt`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  function escHtml(str) {
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+</script>
+</body>
+</html>

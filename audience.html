@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Participate</title>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    height: 100%;
+    background: #fff;
+    color: #111;
+    font-family: -apple-system, sans-serif;
+    font-size: 15px;
+  }
+
+  #app {
+    height: 100%;
+    max-width: 480px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+  }
+
+  #messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .bubble {
+    max-width: 80%;
+    padding: 10px 14px;
+    border-radius: 16px;
+    line-height: 1.4;
+    word-wrap: break-word;
+  }
+
+  .bubble.prompt {
+    background: #f0f0f0;
+    align-self: flex-start;
+    border-bottom-left-radius: 4px;
+  }
+
+  .bubble.response {
+    background: #007aff;
+    color: #fff;
+    align-self: flex-end;
+    border-bottom-right-radius: 4px;
+  }
+
+  .bubble.system {
+    align-self: center;
+    color: #999;
+    font-size: 13px;
+    background: none;
+    padding: 4px;
+  }
+
+  #input-bar {
+    display: flex;
+    gap: 8px;
+    padding: 10px 16px;
+    border-top: 1px solid #e5e5e5;
+  }
+
+  #input-bar input {
+    flex: 1;
+    border: 1px solid #ddd;
+    border-radius: 20px;
+    padding: 10px 16px;
+    font-size: 15px;
+    outline: none;
+  }
+
+  #input-bar input:focus {
+    border-color: #007aff;
+  }
+
+  #input-bar button {
+    background: #007aff;
+    color: #fff;
+    border: none;
+    border-radius: 20px;
+    padding: 10px 18px;
+    font-size: 15px;
+    cursor: pointer;
+  }
+
+  #input-bar button:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="messages">
+    <div class="bubble system">Data Trash Snack Bar</div>
+  </div>
+  <div id="input-bar">
+    <input type="text" id="response-input" placeholder="Type a response..." disabled>
+    <button id="send-btn" onclick="submitResponse()" disabled>Send</button>
+  </div>
+</div>
+
+<script>
+  const socket = io(window.location.origin, { query: { role: 'audience' } });
+  const messages = document.getElementById('messages');
+  const input = document.getElementById('response-input');
+  const sendBtn = document.getElementById('send-btn');
+  let canRespond = false;
+
+  function addBubble(text, type) {
+    const div = document.createElement('div');
+    div.className = 'bubble ' + type;
+    div.textContent = text;
+    messages.appendChild(div);
+    messages.scrollTop = messages.scrollHeight;
+  }
+
+  socket.on('current_state', ({ currentPrompt }) => {
+    if (currentPrompt.active) {
+      addBubble(currentPrompt.text, 'prompt');
+      canRespond = true;
+      input.disabled = false;
+      sendBtn.disabled = false;
+    }
+  });
+
+  socket.on('new_prompt', (prompt) => {
+    addBubble(prompt.text, 'prompt');
+    canRespond = true;
+    input.disabled = false;
+    sendBtn.disabled = false;
+    input.focus();
+  });
+
+  socket.on('prompt_closed', () => {
+    canRespond = false;
+    input.disabled = true;
+    sendBtn.disabled = true;
+    addBubble('Waiting...', 'system');
+  });
+
+  socket.on('response_received', () => {
+    canRespond = false;
+    input.disabled = true;
+    sendBtn.disabled = true;
+  });
+
+  function submitResponse() {
+    const text = input.value.trim();
+    if (!text || !canRespond) return;
+    addBubble(text, 'response');
+    socket.emit('submit_response', text);
+    input.value = '';
+  }
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      submitResponse();
+    }
+  });
+</script>
+</body>
+</html>
