@@ -21,6 +21,11 @@ app.get('/artist', (req, res) => {
   res.sendFile(path.join(__dirname, 'backend.html'));
 });
 
+// Serve projector display
+app.get('/display', (req, res) => {
+  res.sendFile(path.join(__dirname, 'display.html'));
+});
+
 // State
 let currentPrompt = {
   text: 'Welcome. The performance is about to begin.',
@@ -31,7 +36,9 @@ let responses = []; // { id, participantId, promptId, promptText, response, time
 let participantCount = 0;
 
 io.on('connection', (socket) => {
-  const isArtist = socket.handshake.query.role === 'artist';
+  const role = socket.handshake.query.role;
+  const isArtist = role === 'artist';
+  const isDisplay = role === 'display';
 
   if (isArtist) {
     console.log(`Artist connected: ${socket.id}`);
@@ -44,11 +51,27 @@ io.on('connection', (socket) => {
       currentPrompt = {
         text: promptText,
         id: currentPrompt.id + 1,
-        active: true
+        active: true,
+        type: 'text'
       };
       console.log(`New prompt [${currentPrompt.id}]: "${promptText}"`);
       io.to('audience').emit('new_prompt', currentPrompt);
       io.to('artists').emit('prompt_updated', currentPrompt);
+      io.to('display').emit('new_prompt', currentPrompt);
+    });
+
+    // Artist sends emoji prompt
+    socket.on('send_emoji_prompt', () => {
+      currentPrompt = {
+        text: 'React with emojis!',
+        id: currentPrompt.id + 1,
+        active: true,
+        type: 'emoji'
+      };
+      console.log(`Emoji prompt [${currentPrompt.id}]`);
+      io.to('audience').emit('new_prompt', currentPrompt);
+      io.to('artists').emit('prompt_updated', currentPrompt);
+      io.to('display').emit('new_prompt', currentPrompt);
     });
 
     // Artist clears/closes the current prompt
@@ -56,18 +79,27 @@ io.on('connection', (socket) => {
       currentPrompt.active = false;
       io.to('audience').emit('prompt_closed');
       io.to('artists').emit('prompt_updated', currentPrompt);
+      io.to('display').emit('prompt_closed');
     });
 
     // Artist clears all responses
     socket.on('clear_responses', () => {
       responses = [];
       io.to('artists').emit('responses_cleared');
+      io.to('display').emit('responses_cleared');
     });
 
     socket.join('artists');
 
     socket.on('disconnect', () => {
       console.log(`Artist disconnected: ${socket.id}`);
+    });
+
+  } else if (isDisplay) {
+    socket.join('display');
+    socket.emit('state', { currentPrompt, responses });
+    socket.on('disconnect', () => {
+      console.log(`Display disconnected: ${socket.id}`);
     });
 
   } else {
@@ -81,6 +113,13 @@ io.on('connection', (socket) => {
     io.to('artists').emit('participant_count', participantCount);
 
     socket.join('audience');
+
+    // Audience member sends emoji reaction
+    socket.on('emoji_reaction', (emoji) => {
+      if (!currentPrompt.active || currentPrompt.type !== 'emoji') return;
+      io.to('display').emit('emoji_reaction', emoji);
+      io.to('artists').emit('emoji_reaction', emoji);
+    });
 
     // Audience member submits a response
     socket.on('submit_response', (text) => {
@@ -97,8 +136,9 @@ io.on('connection', (socket) => {
       responses.push(entry);
       console.log(`Response from ${entry.participantId}: "${text}"`);
 
-      // Send to all artists
+      // Send to all artists and display
       io.to('artists').emit('new_response', entry);
+      io.to('display').emit('new_response', entry);
 
       // Confirm to the participant
       socket.emit('response_received');
@@ -116,5 +156,6 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`\n🎭 Performance server running`);
   console.log(`   Audience  → http://localhost:${PORT}`);
-  console.log(`   Artist    → http://localhost:${PORT}/backend\n`);
+  console.log(`   Artist    → http://localhost:${PORT}/artist`);
+  console.log(`   Display   → http://localhost:${PORT}/display\n`);
 });

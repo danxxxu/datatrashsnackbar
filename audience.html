@@ -96,6 +96,31 @@
     opacity: 0.4;
     cursor: default;
   }
+
+  #emoji-keyboard {
+    display: none;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 12px 16px;
+    border-top: 1px solid #e5e5e5;
+    justify-content: center;
+  }
+  #emoji-keyboard.active {
+    display: flex;
+  }
+  .emoji-btn {
+    font-size: 32px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 8px;
+    border-radius: 12px;
+    transition: background 0.15s;
+    line-height: 1;
+  }
+  .emoji-btn:active {
+    background: #e5e5e5;
+  }
 </style>
 </head>
 <body>
@@ -107,6 +132,7 @@
     <input type="text" id="response-input" placeholder="Type a response..." disabled>
     <button id="send-btn" onclick="submitResponse()" disabled>Send</button>
   </div>
+  <div id="emoji-keyboard"></div>
 </div>
 
 <script>
@@ -115,6 +141,48 @@
   const input = document.getElementById('response-input');
   const sendBtn = document.getElementById('send-btn');
   let canRespond = false;
+  let emojiMode = false;
+
+  const EMOJIS = ['😀','😂','🥲','😍','🤩','🥳','😎','🤔','😱','😭','🔥','❤️','👏','🙌','✨','💀','👀','💯','🎉','🫶','👍','👎','🤝','💪','🙏','🫡'];
+  const emojiKeyboard = document.getElementById('emoji-keyboard');
+  const inputBar = document.getElementById('input-bar');
+
+  // Build emoji keyboard
+  EMOJIS.forEach(emoji => {
+    const btn = document.createElement('button');
+    btn.className = 'emoji-btn';
+    btn.textContent = emoji;
+    btn.onclick = () => {
+      socket.emit('emoji_reaction', emoji);
+    };
+    emojiKeyboard.appendChild(btn);
+  });
+
+  function setEmojiMode(on) {
+    emojiMode = on;
+    if (on) {
+      inputBar.style.display = 'none';
+      emojiKeyboard.classList.add('active');
+    } else {
+      inputBar.style.display = '';
+      emojiKeyboard.classList.remove('active');
+    }
+  }
+
+  function playNotification() {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(660, ctx.currentTime);
+    osc.frequency.setValueAtTime(880, ctx.currentTime + 0.1);
+    gain.gain.setValueAtTime(0.3, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.3);
+  }
 
   function addBubble(text, type) {
     const div = document.createElement('div');
@@ -126,32 +194,49 @@
 
   socket.on('current_state', ({ currentPrompt }) => {
     if (currentPrompt.active) {
-      addBubble(currentPrompt.text, 'prompt');
-      canRespond = true;
-      input.disabled = false;
-      sendBtn.disabled = false;
+      playNotification();
+      if (currentPrompt.type === 'emoji') {
+        addBubble('React with emojis!', 'prompt');
+        setEmojiMode(true);
+      } else {
+        addBubble(currentPrompt.text, 'prompt');
+        setEmojiMode(false);
+        canRespond = true;
+        input.disabled = false;
+        sendBtn.disabled = false;
+      }
     }
   });
 
   socket.on('new_prompt', (prompt) => {
-    addBubble(prompt.text, 'prompt');
-    canRespond = true;
-    input.disabled = false;
-    sendBtn.disabled = false;
-    input.focus();
+    playNotification();
+    inputBar.style.opacity = '';
+    if (prompt.type === 'emoji') {
+      addBubble('React with emojis!', 'prompt');
+      setEmojiMode(true);
+      canRespond = false;
+      input.disabled = true;
+      sendBtn.disabled = true;
+    } else {
+      addBubble(prompt.text, 'prompt');
+      setEmojiMode(false);
+      canRespond = true;
+      input.disabled = false;
+      sendBtn.disabled = false;
+      input.focus();
+    }
   });
 
   socket.on('prompt_closed', () => {
     canRespond = false;
     input.disabled = true;
     sendBtn.disabled = true;
-    addBubble('Waiting...', 'system');
+    setEmojiMode(false);
+    inputBar.style.opacity = '0.3';
   });
 
   socket.on('response_received', () => {
-    canRespond = false;
-    input.disabled = true;
-    sendBtn.disabled = true;
+    input.focus();
   });
 
   function submitResponse() {

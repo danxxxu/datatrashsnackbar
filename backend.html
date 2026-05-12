@@ -195,30 +195,30 @@
     flex: 0 0 auto;
   }
 
-  .btn-danger {
-    background: transparent;
-    border: 1px solid var(--border-bright);
-    color: var(--muted);
-    font-size: 10px;
-    padding: 7px 12px;
+  .feed-actions {
+    display: flex;
+    gap: 6px;
   }
 
-  .btn-download {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--muted);
-    font-size: 9px;
+  .btn-action {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid var(--border-bright);
+    color: var(--text);
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.5px;
     padding: 5px 10px;
     cursor: pointer;
-    font-family: 'Space Mono', monospace;
-    letter-spacing: 0.5px;
-    text-transform: uppercase;
-    margin-top: 8px;
-    align-self: flex-end;
+    border-radius: 3px;
+    transition: background 0.15s, border-color 0.15s;
   }
-  .btn-download:hover {
-    color: var(--text);
-    border-color: var(--border-bright);
+  .btn-action:hover {
+    background: rgba(255,255,255,0.1);
+    border-color: var(--accent);
+  }
+  .btn-action-danger:hover {
+    border-color: #e74c3c;
+    color: #e74c3c;
   }
 
   /* ── ACTIVE PROMPT DISPLAY ── */
@@ -257,11 +257,11 @@
     margin-bottom: 4px;
   }
 
-  .response-item {
+  .participant-group {
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: 3px;
-    padding: 12px 14px;
+    padding: 10px 14px;
     animation: slideIn 0.3s ease both;
   }
   @keyframes slideIn {
@@ -269,35 +269,41 @@
     to   { opacity: 1; transform: translateX(0); }
   }
 
-  .response-meta {
-    display: flex;
-    justify-content: space-between;
-    margin-bottom: 6px;
-  }
-
-  .response-id {
+  .participant-header {
     font-family: 'Space Mono', monospace;
     font-size: 10px;
     color: var(--accent);
+    margin-bottom: 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
   }
 
-  .response-time {
+  .participant-count {
+    color: var(--muted);
+  }
+
+  .participant-responses {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .response-entry {
+    padding: 6px 10px;
+    background: rgba(255,255,255,0.03);
+    border-left: 2px solid var(--border-bright);
+    border-radius: 2px;
+  }
+
+  .response-entry-meta {
     font-family: 'Space Mono', monospace;
-    font-size: 10px;
+    font-size: 9px;
     color: var(--muted);
+    margin-bottom: 3px;
   }
 
-  .response-prompt-ref {
-    font-size: 11px;
-    color: var(--muted);
-    font-style: italic;
-    margin-bottom: 6px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .response-body {
+  .response-entry-body {
     font-size: 15px;
     color: var(--text);
     line-height: 1.5;
@@ -405,6 +411,7 @@
       <textarea id="prompt-input" placeholder="Type a question or instruction for the audience…" rows="3"></textarea>
       <div class="btn-row">
         <button class="btn btn-send" id="send-btn" onclick="sendPrompt()">→ Broadcast</button>
+        <button class="btn btn-send" onclick="sendEmojiPrompt()" style="background:#333;border-color:#555;">😀 Emoji React</button>
         <button class="btn btn-close" id="close-btn" onclick="closePrompt()" disabled>✕ Close</button>
       </div>
     </div>
@@ -420,12 +427,14 @@
     <div class="card" style="flex:1; display:flex; flex-direction:column; min-height:200px;">
       <div class="feed-header">
         <div class="card-label" style="margin-bottom:0">Live Responses</div>
-        <button class="btn btn-danger" onclick="clearResponses()">Clear all</button>
+        <div class="feed-actions">
+          <button class="btn-action" onclick="downloadResponses()">↓ Download</button>
+          <button class="btn-action btn-action-danger" onclick="clearResponses()">✕ Clear</button>
+        </div>
       </div>
       <div id="responses-feed">
         <div class="empty-state" id="empty-state">Responses will appear here in real time.</div>
       </div>
-      <button class="btn-download" onclick="downloadResponses()">↓ Download .txt</button>
     </div>
 
   </main>
@@ -520,9 +529,12 @@
     if (currentPrompt.active) setActivePrompt(currentPrompt);
 
     allResponses = responses.slice();
-    // Render existing responses newest-first
-    responses.slice().reverse().forEach(r => addResponseItem(r, true));
-    if (responses.length) document.getElementById('empty-state').remove();
+    // Render existing responses grouped by participant
+    renderAllResponses();
+    if (responses.length) {
+      const emptyEl = document.getElementById('empty-state');
+      if (emptyEl) emptyEl.remove();
+    }
   });
 
   // Participant count
@@ -549,7 +561,7 @@
     updateCounts();
     const emptyEl = document.getElementById('empty-state');
     if (emptyEl) emptyEl.remove();
-    addResponseItem(entry, false);
+    addResponseToGroup(entry);
   });
 
   // Responses cleared
@@ -577,25 +589,79 @@
     document.getElementById('close-btn').disabled = true;
   }
 
-  function addResponseItem(entry, prepend = false) {
+  function renderAllResponses() {
     const feed = document.getElementById('responses-feed');
+    const emptyEl = document.getElementById('empty-state');
+    feed.innerHTML = '';
+    if (emptyEl) feed.appendChild(emptyEl);
+
+    // Group by participant
+    const groups = {};
+    allResponses.forEach(r => {
+      if (!groups[r.participantId]) groups[r.participantId] = [];
+      groups[r.participantId].push(r);
+    });
+
+    // Sort groups by latest response (most recent group first)
+    const sorted = Object.entries(groups).sort((a, b) => {
+      const lastA = a[1][a[1].length - 1].timestamp;
+      const lastB = b[1][b[1].length - 1].timestamp;
+      return lastB.localeCompare(lastA);
+    });
+
+    sorted.forEach(([pid, entries]) => {
+      const group = createGroupEl(pid, entries);
+      feed.appendChild(group);
+    });
+  }
+
+  function createGroupEl(pid, entries) {
+    const group = document.createElement('div');
+    group.className = 'participant-group';
+    group.id = 'group-' + pid;
+
+    const header = document.createElement('div');
+    header.className = 'participant-header';
+    header.innerHTML = `<span>#${pid}</span><span class="participant-count">${entries.length} response${entries.length !== 1 ? 's' : ''}</span>`;
+
+    const list = document.createElement('div');
+    list.className = 'participant-responses';
+
+    entries.forEach(r => {
+      list.appendChild(createEntryEl(r));
+    });
+
+    group.appendChild(header);
+    group.appendChild(list);
+    return group;
+  }
+
+  function createEntryEl(entry) {
     const time = new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
     const div = document.createElement('div');
-    div.className = 'response-item';
+    div.className = 'response-entry';
     div.innerHTML = `
-      <div class="response-meta">
-        <span class="response-id">#${entry.participantId}</span>
-        <span class="response-time">${time}</span>
-      </div>
-      <div class="response-prompt-ref">re: ${escHtml(entry.promptText)}</div>
-      <div class="response-body">${escHtml(entry.response)}</div>
+      <div class="response-entry-meta">${time}</div>
+      <div class="response-entry-body">${escHtml(entry.response)}</div>
     `;
+    return div;
+  }
 
-    if (prepend) {
-      feed.appendChild(div);
+  function addResponseToGroup(entry) {
+    const feed = document.getElementById('responses-feed');
+    const existing = document.getElementById('group-' + entry.participantId);
+
+    if (existing) {
+      // Add to existing group and move it to the top
+      const list = existing.querySelector('.participant-responses');
+      list.appendChild(createEntryEl(entry));
+      const count = list.children.length;
+      existing.querySelector('.participant-count').textContent = count + ' response' + (count !== 1 ? 's' : '');
+      feed.insertBefore(existing, feed.firstChild);
     } else {
-      feed.insertBefore(div, feed.firstChild);
+      // Create new group at top
+      const group = createGroupEl(entry.participantId, [entry]);
+      feed.insertBefore(group, feed.firstChild);
     }
   }
 
@@ -615,6 +681,29 @@
     socket.emit('send_prompt', text);
     document.getElementById('prompt-input').value = '';
   }
+
+  function sendEmojiPrompt() {
+    socket.emit('send_emoji_prompt');
+  }
+
+  // Show emoji reactions in the feed
+  socket.on('emoji_reaction', (emoji) => {
+    const feed = document.getElementById('responses-feed');
+    const emptyEl = document.getElementById('empty-state');
+    if (emptyEl) emptyEl.remove();
+    const span = document.createElement('span');
+    span.textContent = emoji;
+    span.style.cssText = 'font-size:24px; margin:2px; display:inline-block;';
+    // Add to an emoji container or create one
+    let emojiRow = document.getElementById('emoji-feed-row');
+    if (!emojiRow) {
+      emojiRow = document.createElement('div');
+      emojiRow.id = 'emoji-feed-row';
+      emojiRow.style.cssText = 'display:flex; flex-wrap:wrap; gap:2px; padding:8px;';
+      feed.insertBefore(emojiRow, feed.firstChild);
+    }
+    emojiRow.appendChild(span);
+  });
 
   function closePrompt() {
     socket.emit('close_prompt');

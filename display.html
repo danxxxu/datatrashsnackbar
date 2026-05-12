@@ -1,0 +1,687 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Display</title>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <style>
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      html,
+      body {
+        height: 100%;
+        background: #fff;
+        color: #111;
+        font-family: -apple-system, sans-serif;
+        overflow: hidden;
+        cursor: none;
+      }
+
+      #cloud {
+        width: 100%;
+        height: 100%;
+        position: relative;
+      }
+
+      .cloud-word {
+        position: absolute;
+        white-space: nowrap;
+        color: #111;
+        transition:
+          font-size 1.2s ease,
+          opacity 1s ease;
+        opacity: 0;
+      }
+      .cloud-word.placed {
+        opacity: 1;
+      }
+
+      #flash {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 60px;
+        pointer-events: none;
+        z-index: 10;
+      }
+
+      #flash-text {
+        font-size: 48px;
+        text-align: center;
+        line-height: 1.35;
+        word-break: break-word;
+        max-width: 800px;
+        opacity: 0;
+        transform: scale(0.95);
+        transition:
+          opacity 0.4s ease,
+          transform 0.4s ease;
+      }
+      #flash-text.visible {
+        opacity: 1;
+        transform: scale(1);
+      }
+
+      #flash-bg {
+        position: fixed;
+        inset: 0;
+        background: #fff;
+        opacity: 0;
+        transition: opacity 0.4s ease;
+        pointer-events: none;
+        z-index: 9;
+      }
+      #flash-bg.visible {
+        opacity: 0.92;
+      }
+
+      .floating-emoji {
+        position: fixed;
+        font-size: 48px;
+        bottom: -60px;
+        pointer-events: none;
+        z-index: 20;
+        animation: floatUp 3s ease-out forwards;
+      }
+
+      @keyframes floatUp {
+        0% {
+          transform: translateY(0) scale(1);
+          opacity: 1;
+        }
+        70% {
+          opacity: 1;
+        }
+        100% {
+          transform: translateY(-110vh) scale(1.2);
+          opacity: 0;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="cloud"></div>
+    <div id="flash-bg"></div>
+    <div id="flash"><div id="flash-text"></div></div>
+
+    <script>
+      const socket = io(window.location.origin, { query: { role: "display" } });
+
+      let allResponses = [];
+      let flashQueue = [];
+      let isFlashing = false;
+      let isEmojiMode = false;
+      const FLASH_HOLD = 3000;
+      const FLASH_HOLD_SHORT = 1200;
+      const FLASH_FADE = 400;
+
+      // ── AUDIO ──
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+      // Reverb: longer impulse (~1.8s tail)
+      const reverbLen = audioCtx.sampleRate * 1.8;
+      const reverbBuf = audioCtx.createBuffer(2, reverbLen, audioCtx.sampleRate);
+      for (let ch = 0; ch < 2; ch++) {
+        const d = reverbBuf.getChannelData(ch);
+        for (let i = 0; i < reverbLen; i++) {
+          d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / reverbLen, 2);
+        }
+      }
+      const reverb = audioCtx.createConvolver();
+      reverb.buffer = reverbBuf;
+      const reverbGain = audioCtx.createGain();
+      reverbGain.gain.value = 0.4;
+      reverb.connect(reverbGain);
+      reverbGain.connect(audioCtx.destination);
+
+      // Feedback delay (~0.3s, ~40% feedback)
+      const fbDelay = audioCtx.createDelay(1.0);
+      fbDelay.delayTime.value = 0.3;
+      const fbGain = audioCtx.createGain();
+      fbGain.gain.value = 0.4;
+      const fbLpf = audioCtx.createBiquadFilter();
+      fbLpf.type = 'lowpass';
+      fbLpf.frequency.value = 2000;
+      // delay -> filter -> feedback -> delay (loop)
+      fbDelay.connect(fbLpf);
+      fbLpf.connect(fbGain);
+      fbGain.connect(fbDelay);
+      // delay output -> reverb + destination
+      fbDelay.connect(audioCtx.destination);
+      fbDelay.connect(reverb);
+
+      // Ambient pad voice — sine with slow attack/release, slight detune for warmth
+      function padVoice(freq, amp, attack, decay) {
+        const t = audioCtx.currentTime;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'sawtooth';
+        // Slight random detune ±2Hz for organic shimmer
+        osc.frequency.value = freq + (Math.random() - 0.5) * 4;
+        gain.gain.setValueAtTime(0.0001, t);
+        gain.gain.linearRampToValueAtTime(amp, t + attack);
+        gain.gain.setValueAtTime(amp, t + attack + 0.3);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + decay);
+        // Low-pass to tame the sawtooth harmonics
+        const lpf = audioCtx.createBiquadFilter();
+        lpf.type = 'lowpass';
+        lpf.frequency.value = freq * 2.5;
+        lpf.Q.value = 0.5;
+        osc.connect(gain);
+        gain.connect(lpf);
+        lpf.connect(audioCtx.destination);
+        lpf.connect(reverb);
+        osc.start(t);
+        osc.stop(t + decay + 0.1);
+      }
+
+      // Continuous pitch mapping — open fifth chord that slides smoothly with text length
+      function midiToFreq(midi) { return 440 * Math.pow(2, (midi - 69) / 12); }
+
+      // All notes from D pentatonic so overlapping chords always harmonize
+      // D, E, G, A across octaves
+      const scale = [38,40,43,45, 50,52,55,57, 62,64,67,69, 74,76,79,81];
+
+      // Snap a MIDI value to the nearest note in the scale
+      function snapToScale(midi) {
+        let closest = scale[0];
+        for (const n of scale) {
+          if (Math.abs(n - midi) < Math.abs(closest - midi)) closest = n;
+        }
+        return closest;
+      }
+
+      function playTextChime(textLen) {
+        const len = Math.max(1, Math.min(textLen || 50, 300));
+
+        // Continuous mapping: short (1) -> MIDI 66, long (300) -> MIDI 38
+        const rawMidi = 66 - ((len - 1) / 299) * 28;
+        const root = snapToScale(rawMidi);
+
+        // Build a full chord: sub octave, root, third, fifth, octave above
+        const chord = [
+          snapToScale(root - 12),
+          root,
+          snapToScale(root + 3),
+          snapToScale(root + 7),
+          snapToScale(root + 12),
+        ];
+
+        const amp = 0.045;
+        const attack = 0.15;
+        const decay = 7;
+
+        chord.forEach((midi, i) => {
+          setTimeout(() => {
+            padVoice(midiToFreq(midi), amp, attack, decay);
+          }, i * 50);
+        });
+      }
+
+      function playEmojiPop() {
+        const t = audioCtx.currentTime;
+
+        // SinOsc with freq envelope: 2000 -> 200 over 0.03s (exp curve)
+        const osc = audioCtx.createOscillator();
+        const oscGain = audioCtx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(2000, t);
+        osc.frequency.exponentialRampToValueAtTime(200, t + 0.03);
+        osc.connect(oscGain);
+
+        // WhiteNoise burst: perc(0.001, 0.015) * 0.2
+        const bufSize = audioCtx.sampleRate * 0.02;
+        const noiseBuf = audioCtx.createBuffer(1, bufSize, audioCtx.sampleRate);
+        const noiseData = noiseBuf.getChannelData(0);
+        for (let i = 0; i < bufSize; i++) noiseData[i] = Math.random() * 2 - 1;
+        const noise = audioCtx.createBufferSource();
+        noise.buffer = noiseBuf;
+        const noiseGain = audioCtx.createGain();
+        noiseGain.gain.setValueAtTime(0.0001, t);
+        noiseGain.gain.linearRampToValueAtTime(0.2, t + 0.001);
+        noiseGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.016);
+        noise.connect(noiseGain);
+
+        // Master envelope: perc(0.01, 0.1) * 0.3
+        const master = audioCtx.createGain();
+        master.gain.setValueAtTime(0.0001, t);
+        master.gain.linearRampToValueAtTime(0.3, t + 0.01);
+        master.gain.exponentialRampToValueAtTime(0.0001, t + 0.11);
+
+        oscGain.connect(master);
+        noiseGain.connect(master);
+        master.connect(audioCtx.destination);
+        master.connect(reverb);
+
+        osc.start(t);
+        osc.stop(t + 0.12);
+        noise.start(t);
+        noise.stop(t + 0.02);
+      }
+
+      const STOP_WORDS = new Set([
+        "i",
+        "me",
+        "my",
+        "myself",
+        "we",
+        "our",
+        "ours",
+        "ourselves",
+        "you",
+        "your",
+        "yours",
+        "yourself",
+        "yourselves",
+        "he",
+        "him",
+        "his",
+        "himself",
+        "she",
+        "her",
+        "hers",
+        "herself",
+        "it",
+        "its",
+        "itself",
+        "they",
+        "them",
+        "their",
+        "theirs",
+        "themselves",
+        "what",
+        "which",
+        "who",
+        "whom",
+        "this",
+        "that",
+        "these",
+        "those",
+        "am",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "have",
+        "has",
+        "had",
+        "having",
+        "do",
+        "does",
+        "did",
+        "doing",
+        "a",
+        "an",
+        "the",
+        "and",
+        "but",
+        "if",
+        "or",
+        "because",
+        "as",
+        "until",
+        "while",
+        "of",
+        "at",
+        "by",
+        "for",
+        "with",
+        "about",
+        "against",
+        "between",
+        "through",
+        "during",
+        "before",
+        "after",
+        "above",
+        "below",
+        "to",
+        "from",
+        "up",
+        "down",
+        "in",
+        "out",
+        "on",
+        "off",
+        "over",
+        "under",
+        "again",
+        "further",
+        "then",
+        "once",
+        "here",
+        "there",
+        "when",
+        "where",
+        "why",
+        "how",
+        "all",
+        "both",
+        "each",
+        "few",
+        "more",
+        "most",
+        "other",
+        "some",
+        "such",
+        "no",
+        "nor",
+        "not",
+        "only",
+        "own",
+        "same",
+        "so",
+        "than",
+        "too",
+        "very",
+        "s",
+        "t",
+        "can",
+        "will",
+        "just",
+        "don",
+        "should",
+        "now",
+        "im",
+        "ive",
+        "id",
+        "its",
+        "thats",
+        "dont",
+        "cant",
+        "wont",
+        "isnt",
+        "arent",
+        "wasnt",
+        "werent",
+        "hasnt",
+        "havent",
+        "hadnt",
+        "doesnt",
+        "didnt",
+        "wont",
+        "wouldnt",
+        "shant",
+        "shouldnt",
+        "mustnt",
+        "neednt",
+        "also",
+        "like",
+        "would",
+        "could",
+        "get",
+        "got",
+        "really",
+        "much",
+        "thing",
+        "things",
+        "something",
+        "want",
+        "feel",
+        "know",
+        "think",
+        "make",
+        "way",
+        "go",
+        "going",
+        "one",
+        "even",
+        "still",
+        "let",
+        "well",
+        "right",
+        "back",
+        "see",
+        "take",
+        "come",
+        "say",
+        "said",
+      ]);
+
+      // ── INITIAL STATE ──
+      socket.on("state", ({ currentPrompt, responses }) => {
+        if (currentPrompt.active && currentPrompt.type === "emoji") {
+          isEmojiMode = true;
+          document.getElementById("cloud").style.display = "none";
+        } else {
+          allResponses = responses.slice();
+          updateCloud();
+        }
+      });
+
+      socket.on("new_prompt", (prompt) => {
+        if (prompt.type === "emoji") {
+          isEmojiMode = true;
+          // Hide word cloud and flash
+          document.getElementById("cloud").style.display = "none";
+          hideFlash();
+          flashQueue = [];
+          isFlashing = false;
+        } else {
+          isEmojiMode = false;
+          document.getElementById("cloud").style.display = "";
+        }
+      });
+
+      socket.on("new_response", (entry) => {
+        if (isEmojiMode) return;
+        allResponses.push(entry);
+        flashQueue.push(entry);
+        if (!isFlashing) flashNext();
+        else interruptFlash();
+      });
+
+      socket.on("emoji_reaction", (emoji) => {
+        playEmojiPop();
+        spawnFloatingEmoji(emoji);
+      });
+
+      socket.on("prompt_closed", () => {
+        if (isEmojiMode) {
+          isEmojiMode = false;
+          document.getElementById("cloud").style.display = "";
+        }
+      });
+
+      socket.on("responses_cleared", () => {
+        allResponses = [];
+        flashQueue = [];
+        isFlashing = false;
+        document.getElementById("cloud").innerHTML = "";
+        hideFlash();
+      });
+
+      // ── FLASH: show response in center, then update cloud ──
+      let flashTimer = null;
+
+      function flashNext() {
+        if (flashQueue.length === 0) {
+          isFlashing = false;
+          return;
+        }
+        isFlashing = true;
+        const entry = flashQueue.shift();
+        showFlash(entry.response);
+
+        // If more texts are queued, show this one briefly; otherwise hold longer
+        const hold = flashQueue.length > 0 ? FLASH_HOLD_SHORT : FLASH_HOLD;
+        scheduleFlashTransition(hold);
+      }
+
+      function scheduleFlashTransition(hold) {
+        clearTimeout(flashTimer);
+        flashTimer = setTimeout(() => {
+          hideFlash();
+          setTimeout(() => {
+            updateCloud();
+            flashNext();
+          }, FLASH_FADE);
+        }, hold);
+      }
+
+      // When a new response arrives while one is already showing, shorten the wait
+      function interruptFlash() {
+        if (isFlashing) {
+          scheduleFlashTransition(FLASH_HOLD_SHORT);
+        }
+      }
+
+      function showFlash(text) {
+        playTextChime(text.length);
+        const el = document.getElementById("flash-text");
+        const bg = document.getElementById("flash-bg");
+
+        const len = text.length;
+        if (len > 200) el.style.fontSize = "28px";
+        else if (len > 100) el.style.fontSize = "36px";
+        else if (len > 50) el.style.fontSize = "44px";
+        else el.style.fontSize = "48px";
+
+        el.textContent = text;
+        requestAnimationFrame(() => {
+          bg.classList.add("visible");
+          el.classList.add("visible");
+        });
+      }
+
+      function hideFlash() {
+        document.getElementById("flash-text").classList.remove("visible");
+        document.getElementById("flash-bg").classList.remove("visible");
+      }
+
+      // ── WORD CLOUD ──
+      function getWordFrequencies() {
+        const freq = {};
+        allResponses.forEach((r) => {
+          const words = r.response
+            .toLowerCase()
+            .replace(/[^a-z\s'-]/g, "")
+            .split(/\s+/);
+          words.forEach((w) => {
+            w = w.replace(/^['-]+|['-]+$/g, "");
+            if (w.length > 1 && !STOP_WORDS.has(w)) {
+              freq[w] = (freq[w] || 0) + 1;
+            }
+          });
+        });
+        return freq;
+      }
+
+      function updateCloud() {
+        const cloudEl = document.getElementById("cloud");
+        const freq = getWordFrequencies();
+
+        const sorted = Object.entries(freq)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 99);
+
+        if (sorted.length === 0) {
+          cloudEl.innerHTML = "";
+          return;
+        }
+
+        const maxFreq = sorted[0][1];
+        const minFreq = sorted[sorted.length - 1][1];
+        const W = cloudEl.offsetWidth;
+        const H = cloudEl.offsetHeight;
+
+        const currentWords = new Set(sorted.map((s) => s[0]));
+        cloudEl.querySelectorAll(".cloud-word").forEach((el) => {
+          if (!currentWords.has(el.dataset.word)) {
+            el.style.opacity = "0";
+            setTimeout(() => el.remove(), 800);
+          }
+        });
+
+        const placed = [];
+
+        sorted.forEach(([word, count], i) => {
+          const ratio =
+            minFreq === maxFreq ? 1 : (count - minFreq) / (maxFreq - minFreq);
+          const fontSize = Math.round(18 + ratio * 22);
+          // const opacity = 0.4 + ratio * 0.6;
+          const opacity = 1;
+
+          let el = cloudEl.querySelector(`[data-word="${CSS.escape(word)}"]`);
+          const isNew = !el;
+
+          if (isNew) {
+            el = document.createElement("span");
+            el.className = "cloud-word";
+            el.dataset.word = word;
+            el.textContent = word;
+            cloudEl.appendChild(el);
+          }
+
+          el.style.fontSize = fontSize + "px";
+
+          if (isNew) {
+            // Only place new words; existing words stay where they are
+            el.style.opacity = "0";
+            const estW = word.length * fontSize * 0.55;
+            const estH = fontSize * 1.3;
+            let posX,
+              posY,
+              tries = 0,
+              overlap;
+
+            do {
+              posX = 30 + Math.random() * (W - estW - 60);
+              posY = 30 + Math.random() * (H - estH - 60);
+              overlap = placed.some(
+                (p) =>
+                  posX < p.x + p.w + 10 &&
+                  posX + estW + 10 > p.x &&
+                  posY < p.y + p.h + 6 &&
+                  posY + estH + 6 > p.y,
+              );
+              tries++;
+            } while (overlap && tries < 60);
+
+            el.style.left = posX + "px";
+            el.style.top = posY + "px";
+
+            placed.push({ x: posX, y: posY, w: estW, h: estH });
+
+            setTimeout(() => {
+              el.style.opacity = String(opacity);
+              el.classList.add("placed");
+            }, i * 30);
+          } else {
+            // Existing word: just update opacity for frequency change
+            el.style.opacity = String(opacity);
+            const estW = word.length * fontSize * 0.55;
+            const estH = fontSize * 1.3;
+            const posX = parseFloat(el.style.left);
+            const posY = parseFloat(el.style.top);
+            placed.push({ x: posX, y: posY, w: estW, h: estH });
+          }
+        });
+      }
+
+      function spawnFloatingEmoji(emoji) {
+        const el = document.createElement("div");
+        el.className = "floating-emoji";
+        el.textContent = emoji;
+        el.style.left = 10 + Math.random() * 80 + "vw";
+        el.style.animationDuration = 2.5 + Math.random() * 1.5 + "s";
+        document.body.appendChild(el);
+        el.addEventListener("animationend", () => el.remove());
+      }
+
+      window.addEventListener("resize", () => updateCloud());
+    </script>
+  </body>
+</html>
