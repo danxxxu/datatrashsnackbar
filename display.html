@@ -17,8 +17,8 @@
       html,
       body {
         height: 100%;
-        background: #fff;
-        color: #111;
+        background: #000000;
+        color: #ffffff;
         font-family: -apple-system, sans-serif;
         overflow: hidden;
         cursor: none;
@@ -28,12 +28,13 @@
         width: 100%;
         height: 100%;
         position: relative;
+        transition: opacity 0.4s ease;
       }
 
       .cloud-word {
         position: absolute;
         white-space: nowrap;
-        color: #111;
+        color: #ffffff;
         transition:
           font-size 1.2s ease,
           opacity 1s ease;
@@ -74,7 +75,7 @@
       #flash-bg {
         position: fixed;
         inset: 0;
-        background: #fff;
+        background: #ffffff00;
         opacity: 0;
         transition: opacity 0.4s ease;
         pointer-events: none;
@@ -526,6 +527,7 @@
           hideFlash();
           setTimeout(() => {
             updateCloud();
+            document.getElementById("cloud").style.opacity = "1";
             flashNext();
           }, FLASH_FADE);
         }, hold);
@@ -542,6 +544,7 @@
         playTextChime(text.length);
         const el = document.getElementById("flash-text");
         const bg = document.getElementById("flash-bg");
+        const cloud = document.getElementById("cloud");
 
         const len = text.length;
         if (len > 200) el.style.fontSize = "28px";
@@ -550,6 +553,7 @@
         else el.style.fontSize = "48px";
 
         el.textContent = text;
+        cloud.style.opacity = "0.15";
         requestAnimationFrame(() => {
           bg.classList.add("visible");
           el.classList.add("visible");
