@@ -89,6 +89,16 @@ io.on('connection', (socket) => {
       io.to('display').emit('responses_cleared');
     });
 
+    // Artist shows an instruction text on the display only
+    socket.on('show_instruction', (text) => {
+      io.to('display').emit('show_instruction', text);
+    });
+
+    // Artist hides the instruction text
+    socket.on('hide_instruction', () => {
+      io.to('display').emit('hide_instruction');
+    });
+
     socket.join('artists');
 
     socket.on('disconnect', () => {

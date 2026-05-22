@@ -471,6 +471,17 @@
       <div class="quick-list" id="quick-list"></div>
     </div>
 
+    <!-- INSTRUCTION TEXTS -->
+    <div class="card">
+      <div class="card-label">Instruction Texts</div>
+      <div class="quick-list" id="instruction-list"></div>
+      <div style="display:flex; gap:6px; margin-top:8px;">
+        <input id="instruction-input" type="text" placeholder="Add instruction…" style="flex:1; background:transparent; border:1px solid var(--border); border-radius:3px; color:var(--text); font-family:'DM Sans',sans-serif; font-size:13px; padding:7px 10px; outline:none;">
+        <button onclick="addInstruction()" style="background:transparent; border:1px solid var(--border); border-radius:3px; color:var(--text); font-family:'Space Mono',monospace; font-size:10px; padding:7px 10px; cursor:pointer; white-space:nowrap;">+ Add</button>
+      </div>
+      <button onclick="socket.emit('hide_instruction')" class="btn-action btn-action-danger" style="margin-top:8px; width:100%;">✕ Close instruction</button>
+    </div>
+
   </aside>
 
 </div>
@@ -736,6 +747,45 @@
   function escHtml(str) {
     return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
+
+  // ── INSTRUCTION TEXTS ──
+  // ── Change this URL to match your deployed address ──
+  const PARTICIPATION_URL = 'https://datatrashsnackbar.onrender.com/';
+
+  const instructions = [
+    'Open your phone browser and go to:',
+    PARTICIPATION_URL,
+    'Scan the QR code on screen to join.',
+    'Type your response and press Send.',
+    'You can send multiple responses.',
+  ];
+
+  function addInstruction() {
+    const input = document.getElementById('instruction-input');
+    const text = input.value.trim();
+    if (!text) return;
+    instructions.push(text);
+    input.value = '';
+    renderInstructions();
+  }
+
+  function renderInstructions() {
+    const list = document.getElementById('instruction-list');
+    list.innerHTML = '';
+    instructions.forEach((text, idx) => {
+      const btn = document.createElement('button');
+      btn.className = 'quick-item';
+      btn.textContent = text;
+      btn.onclick = () => socket.emit('show_instruction', text);
+      list.appendChild(btn);
+    });
+  }
+
+  document.getElementById('instruction-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') addInstruction();
+  });
+
+  renderInstructions();
 </script>
 </body>
 </html>

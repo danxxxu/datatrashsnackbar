@@ -85,6 +85,35 @@
         opacity: 0.92;
       }
 
+      #prompt-display {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 80px;
+        pointer-events: none;
+        z-index: 8;
+        opacity: 0;
+        transition: opacity 1s ease;
+      }
+      #prompt-display.visible { opacity: 1; }
+
+      #prompt-display-inner {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+
+      #prompt-display-text {
+        font-size: 36px;
+        text-align: center;
+        line-height: 1.4;
+        color: #fff;
+        max-width: 700px;
+        word-break: break-word;
+      }
+
       .floating-emoji {
         position: fixed;
         font-size: 48px;
@@ -111,6 +140,12 @@
   </head>
   <body>
     <div id="cloud"></div>
+    <div id="prompt-display">
+      <div id="prompt-display-inner">
+        <div id="prompt-display-text"></div>
+        <img id="prompt-qr" src="" alt="" style="display:none; width:160px; height:160px; margin-top:20px; border-radius:8px;">
+      </div>
+    </div>
     <div id="flash-bg"></div>
     <div id="flash"><div id="flash-text"></div></div>
 
@@ -459,25 +494,55 @@
         } else {
           allResponses = responses.slice();
           updateCloud();
+          // Show prompt if active and no responses yet
+          if (currentPrompt.active && responses.length === 0) {
+            showPromptDisplay(currentPrompt.text);
+          }
         }
       });
+
+      function showPromptDisplay(text) {
+        const el = document.getElementById("prompt-display");
+        const qr = document.getElementById("prompt-qr");
+        document.getElementById("prompt-display-text").textContent = text;
+
+        // Show QR code if text looks like a URL
+        const isUrl = /^https?:\/\//i.test(text.trim());
+        if (isUrl) {
+          const encoded = encodeURIComponent(text.trim());
+          qr.src = `https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=${encoded}&bgcolor=ffffff&color=111111`;
+          qr.style.display = 'block';
+        } else {
+          qr.style.display = 'none';
+        }
+
+        document.getElementById("cloud").style.opacity = "0.15";
+        el.classList.add("visible");
+      }
+
+      function hidePromptDisplay() {
+        document.getElementById("prompt-display").classList.remove("visible");
+        document.getElementById("cloud").style.opacity = "1";
+      }
 
       socket.on("new_prompt", (prompt) => {
         if (prompt.type === "emoji") {
           isEmojiMode = true;
-          // Hide word cloud and flash
           document.getElementById("cloud").style.display = "none";
           hideFlash();
+          hidePromptDisplay();
           flashQueue = [];
           isFlashing = false;
         } else {
           isEmojiMode = false;
           document.getElementById("cloud").style.display = "";
+          showPromptDisplay(prompt.text);
         }
       });
 
       socket.on("new_response", (entry) => {
         if (isEmojiMode) return;
+        hidePromptDisplay();
         allResponses.push(entry);
         flashQueue.push(entry);
         if (!isFlashing) flashNext();
@@ -489,7 +554,16 @@
         spawnFloatingEmoji(emoji);
       });
 
+      socket.on("show_instruction", (text) => {
+        showPromptDisplay(text);
+      });
+
+      socket.on("hide_instruction", () => {
+        hidePromptDisplay();
+      });
+
       socket.on("prompt_closed", () => {
+        hidePromptDisplay();
         if (isEmojiMode) {
           isEmojiMode = false;
           document.getElementById("cloud").style.display = "";
