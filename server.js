@@ -26,6 +26,11 @@ app.get('/display', (req, res) => {
   res.sendFile(path.join(__dirname, 'display.html'));
 });
 
+// Serve chat display
+app.get('/display-chat', (req, res) => {
+  res.sendFile(path.join(__dirname, 'display-chat.html'));
+});
+
 // State
 let currentPrompt = {
   text: 'Welcome. The performance is about to begin.',
