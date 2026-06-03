@@ -121,6 +121,7 @@
   .emoji-btn:active {
     background: #e5e5e5;
   }
+
 </style>
 </head>
 <body>
@@ -154,6 +155,7 @@
     btn.textContent = emoji;
     btn.onclick = () => {
       socket.emit('emoji_reaction', emoji);
+      addBubble(emoji, 'response');
     };
     emojiKeyboard.appendChild(btn);
   });
