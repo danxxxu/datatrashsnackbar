@@ -276,6 +276,7 @@
     margin-bottom: 5px;
     display: flex;
     justify-content: space-between;
+    align-items: center;
   }
 
   .response-item-id { color: var(--accent); }
@@ -286,6 +287,20 @@
     line-height: 1.5;
     word-break: break-word;
   }
+
+  .response-delete-btn {
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 0 2px;
+    line-height: 1;
+    opacity: 0;
+    transition: opacity 0.15s, color 0.15s;
+  }
+  .response-item:hover .response-delete-btn { opacity: 1; }
+  .response-delete-btn:hover { color: #e74c3c; }
 
   .empty-state {
     font-family: 'Space Mono', monospace;
@@ -621,15 +636,39 @@
     const time = new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     const div = document.createElement('div');
     div.className = 'response-item';
+    div.dataset.id = entry.id;
     div.innerHTML = `
       <div class="response-item-meta">
         <span class="response-item-id">#${entry.participantId}</span>
-        <span>${time}</span>
+        <span style="display:flex;align-items:center;gap:8px;">
+          <span>${time}</span>
+          <button class="response-delete-btn" title="Delete">✕</button>
+        </span>
       </div>
       <div class="response-item-body">${escHtml(entry.response)}</div>
     `;
+    div.querySelector('.response-delete-btn').onclick = () => deleteResponse(entry.id);
     return div;
   }
+
+  function deleteResponse(id) {
+    socket.emit('delete_response', id);
+  }
+
+  socket.on('response_deleted', (id) => {
+    // Remove from local array
+    allResponses = allResponses.filter(r => r.id !== id);
+    totalResponses = allResponses.length;
+    updateCounts();
+    // Remove from DOM
+    const el = document.querySelector(`.response-item[data-id="${id}"]`);
+    if (el) el.remove();
+    // Show empty state if nothing left
+    const feed = document.getElementById('responses-feed');
+    if (!feed.children.length) {
+      feed.innerHTML = '<div class="empty-state" id="empty-state">Responses will appear here in real time.</div>';
+    }
+  });
 
   function addResponseToFeed(entry) {
     const feed = document.getElementById('responses-feed');

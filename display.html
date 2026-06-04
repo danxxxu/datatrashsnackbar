@@ -127,9 +127,10 @@
       const placed = [];
       const PAD = 16;
 
-      function placeMessage(text) {
+      function placeMessage(text, id) {
         const el = document.createElement("div");
         el.className = "message-text";
+        if (id) el.dataset.id = id;
         el.textContent = text;
         canvasEl.appendChild(el);
 
@@ -297,11 +298,12 @@
       let spotlightQueue = [];
       let spotlightActive = false;
       let spotlightTimer = null;
+      let spotlightCurrentId = null;
       const SPOTLIGHT_HOLD = 4000;
 
-      function showSpotlight(text) {
+      function showSpotlight(text, id) {
         spotlightActive = true;
-        // Dim canvas while spotlight is shown
+        spotlightCurrentId = id || null;
         canvasEl.style.opacity = "0.12";
         const len = text.length;
         if (len > 200) spotlightText.style.fontSize = "24px";
@@ -316,38 +318,38 @@
       }
 
       function commitAndNext() {
-        // Move the current text to the background canvas
         const text = spotlightText.textContent;
+        const id = spotlightCurrentId;
+        spotlightCurrentId = null;
         spotlightEl.classList.remove("visible");
         if (!isEmojiMode) canvasEl.style.opacity = "1";
-        placeMessage(text);
+        placeMessage(text, id);
 
         setTimeout(() => {
           if (spotlightQueue.length > 0) {
             const next = spotlightQueue.shift();
-            playTextChime(next.length);
-            showSpotlight(next);
+            playTextChime(next.text.length);
+            showSpotlight(next.text, next.id);
           } else {
             spotlightActive = false;
           }
         }, 500);
       }
 
-      function queueSpotlight(text) {
+      function queueSpotlight(text, id) {
         if (!spotlightActive) {
           playTextChime(text.length);
-          showSpotlight(text);
+          showSpotlight(text, id);
         } else {
-          // Interrupt current, commit it early, then show new one
           clearTimeout(spotlightTimer);
-          spotlightQueue = [text]; // replace queue with latest
+          spotlightQueue = [{ text, id }];
           commitAndNext();
         }
       }
 
       // ── SOCKET EVENTS ──
       socket.on("state", ({ currentPrompt, responses }) => {
-        responses.forEach(r => placeMessage(r.response));
+        responses.forEach(r => placeMessage(r.response, r.id));
         if (currentPrompt.active) {
           if (currentPrompt.type === "emoji") {
             isEmojiMode = true;
@@ -372,12 +374,39 @@
       socket.on("new_response", (entry) => {
         if (isEmojiMode) return;
         hidePromptDisplay();
-        queueSpotlight(entry.response);
+        queueSpotlight(entry.response, entry.id);
       });
 
       socket.on("emoji_reaction", (emoji) => {
         playEmojiPop();
         spawnFloatingEmoji(emoji);
+      });
+
+      socket.on("response_deleted", (id) => {
+        // Remove from background canvas if already placed
+        const el = canvasEl.querySelector(`[data-id="${id}"]`);
+        if (el) {
+          el.style.opacity = "0";
+          setTimeout(() => el.remove(), 600);
+        }
+        // If currently in spotlight, dismiss it
+        if (spotlightCurrentId === id) {
+          clearTimeout(spotlightTimer);
+          spotlightEl.classList.remove("visible");
+          spotlightCurrentId = null;
+          if (!isEmojiMode) canvasEl.style.opacity = "1";
+          setTimeout(() => {
+            if (spotlightQueue.length > 0) {
+              const next = spotlightQueue.shift();
+              playTextChime(next.text.length);
+              showSpotlight(next.text, next.id);
+            } else {
+              spotlightActive = false;
+            }
+          }, 500);
+        }
+        // Remove from queue if pending
+        spotlightQueue = spotlightQueue.filter(q => q.id !== id);
       });
 
       socket.on("show_instruction", (text) => showPromptDisplay(text));

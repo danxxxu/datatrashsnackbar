@@ -94,6 +94,13 @@ io.on('connection', (socket) => {
       io.to('display').emit('responses_cleared');
     });
 
+    // Artist deletes a single response
+    socket.on('delete_response', (id) => {
+      responses = responses.filter(r => r.id !== id);
+      io.to('artists').emit('response_deleted', id);
+      io.to('display').emit('response_deleted', id);
+    });
+
     // Artist shows an instruction text on the display only
     socket.on('show_instruction', (text) => {
       io.to('display').emit('show_instruction', text);
