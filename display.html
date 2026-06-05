@@ -27,14 +27,15 @@
       .message-text {
         position: absolute;
         color: #fff;
-        font-size: 16px;
         line-height: 1.4;
-        max-width: 280px;
+        max-width: 320px;
         word-wrap: break-word;
         opacity: 0;
-        transition: opacity 0.6s ease;
+        font-size: 36px;
+        transition: opacity 0.5s ease, font-size 1.8s cubic-bezier(0.25, 0.46, 0.45, 0.94);
       }
       .message-text.visible { opacity: 1; }
+      .message-text.settled { font-size: 16px; }
 
       /* ── PROMPT / INSTRUCTION OVERLAY ── */
       #prompt-display {
@@ -66,30 +67,6 @@
         word-break: break-word;
       }
 
-      /* ── RESPONSE SPOTLIGHT ── */
-      #response-spotlight {
-        position: fixed;
-        inset: 0;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: 80px;
-        pointer-events: none;
-        z-index: 7;
-        opacity: 0;
-        transition: opacity 0.5s ease;
-      }
-      #response-spotlight.visible { opacity: 1; }
-
-      #response-spotlight-text {
-        font-size: 42px;
-        text-align: center;
-        line-height: 1.4;
-        color: #fff;
-        max-width: 760px;
-        word-break: break-word;
-      }
-
       /* ── FLOATING EMOJI ── */
       .floating-emoji {
         position: fixed;
@@ -109,7 +86,6 @@
   </head>
   <body>
     <div id="canvas"></div>
-    <div id="response-spotlight"><div id="response-spotlight-text"></div></div>
 
     <div id="prompt-display">
       <div id="prompt-display-inner">
@@ -134,13 +110,12 @@
         el.textContent = text;
         canvasEl.appendChild(el);
 
-        // Measure after insert
         const W = canvasEl.offsetWidth;
         const H = canvasEl.offsetHeight;
+        // Use settled (small) size for overlap calculation
         const elW = Math.min(280, W * 0.35);
         el.style.maxWidth = elW + "px";
 
-        // Estimate height: ~1.4 line height * 16px * lines
         const charsPerLine = elW / 9;
         const lines = Math.ceil(text.length / charsPerLine);
         const elH = lines * 16 * 1.4 + 8;
@@ -162,7 +137,11 @@
         el.style.left = x + "px";
         el.style.top = y + "px";
 
-        requestAnimationFrame(() => el.classList.add("visible"));
+        // Fade in at large size, then shrink to settled size
+        requestAnimationFrame(() => {
+          el.classList.add("visible");
+          setTimeout(() => el.classList.add("settled"), 100);
+        });
       }
 
       // ── AUDIO ──
@@ -292,89 +271,29 @@
         if (!isEmojiMode) canvasEl.style.opacity = "1";
       }
 
-      // ── RESPONSE SPOTLIGHT ──
-      const spotlightEl = document.getElementById("response-spotlight");
-      const spotlightText = document.getElementById("response-spotlight-text");
-      let spotlightQueue = [];
-      let spotlightActive = false;
-      let spotlightTimer = null;
-      let spotlightCurrentId = null;
-      const SPOTLIGHT_HOLD = 4000;
-
-      function showSpotlight(text, id) {
-        spotlightActive = true;
-        spotlightCurrentId = id || null;
-        canvasEl.style.opacity = "0.12";
-        const len = text.length;
-        if (len > 200) spotlightText.style.fontSize = "24px";
-        else if (len > 100) spotlightText.style.fontSize = "32px";
-        else if (len > 50)  spotlightText.style.fontSize = "38px";
-        else                spotlightText.style.fontSize = "42px";
-        spotlightText.textContent = text;
-        spotlightEl.classList.add("visible");
-
-        clearTimeout(spotlightTimer);
-        spotlightTimer = setTimeout(() => commitAndNext(), SPOTLIGHT_HOLD);
-      }
-
-      function commitAndNext() {
-        const text = spotlightText.textContent;
-        const id = spotlightCurrentId;
-        spotlightCurrentId = null;
-        spotlightEl.classList.remove("visible");
-        if (!isEmojiMode) canvasEl.style.opacity = "1";
-        placeMessage(text, id);
-
-        setTimeout(() => {
-          if (spotlightQueue.length > 0) {
-            const next = spotlightQueue.shift();
-            playTextChime(next.text.length);
-            showSpotlight(next.text, next.id);
-          } else {
-            spotlightActive = false;
-          }
-        }, 500);
-      }
-
-      function queueSpotlight(text, id) {
-        if (!spotlightActive) {
-          playTextChime(text.length);
-          showSpotlight(text, id);
-        } else {
-          clearTimeout(spotlightTimer);
-          spotlightQueue = [{ text, id }];
-          commitAndNext();
-        }
-      }
-
       // ── SOCKET EVENTS ──
       socket.on("state", ({ currentPrompt, responses }) => {
         responses.forEach(r => placeMessage(r.response, r.id));
-        if (currentPrompt.active) {
-          if (currentPrompt.type === "emoji") {
-            isEmojiMode = true;
-          } else if (responses.length === 0) {
-            showPromptDisplay(currentPrompt.text);
-          }
+        if (currentPrompt.active && currentPrompt.type === "emoji") {
+          isEmojiMode = true;
+          canvasEl.style.opacity = "0";
         }
       });
 
       socket.on("new_prompt", (prompt) => {
         if (prompt.type === "emoji") {
           isEmojiMode = true;
-          hidePromptDisplay();
           canvasEl.style.opacity = "0";
           setReverbAmount(0.15);
         } else {
           isEmojiMode = false;
-          showPromptDisplay(prompt.text);
         }
       });
 
       socket.on("new_response", (entry) => {
         if (isEmojiMode) return;
-        hidePromptDisplay();
-        queueSpotlight(entry.response, entry.id);
+        playTextChime(entry.response.length);
+        placeMessage(entry.response, entry.id);
       });
 
       socket.on("emoji_reaction", (emoji) => {
@@ -383,30 +302,11 @@
       });
 
       socket.on("response_deleted", (id) => {
-        // Remove from background canvas if already placed
         const el = canvasEl.querySelector(`[data-id="${id}"]`);
         if (el) {
           el.style.opacity = "0";
           setTimeout(() => el.remove(), 600);
         }
-        // If currently in spotlight, dismiss it
-        if (spotlightCurrentId === id) {
-          clearTimeout(spotlightTimer);
-          spotlightEl.classList.remove("visible");
-          spotlightCurrentId = null;
-          if (!isEmojiMode) canvasEl.style.opacity = "1";
-          setTimeout(() => {
-            if (spotlightQueue.length > 0) {
-              const next = spotlightQueue.shift();
-              playTextChime(next.text.length);
-              showSpotlight(next.text, next.id);
-            } else {
-              spotlightActive = false;
-            }
-          }, 500);
-        }
-        // Remove from queue if pending
-        spotlightQueue = spotlightQueue.filter(q => q.id !== id);
       });
 
       socket.on("show_instruction", (text) => showPromptDisplay(text));
@@ -415,7 +315,6 @@
       socket.on("prompt_closed", () => {
         const wasEmoji = isEmojiMode;
         isEmojiMode = false;
-        hidePromptDisplay();
         if (wasEmoji) {
           canvasEl.style.opacity = "1";
           setReverbAmount(0.4);
@@ -423,10 +322,6 @@
       });
 
       socket.on("responses_cleared", () => {
-        clearTimeout(spotlightTimer);
-        spotlightEl.classList.remove("visible");
-        spotlightQueue = [];
-        spotlightActive = false;
         canvasEl.innerHTML = "";
         placed.length = 0;
         hidePromptDisplay();

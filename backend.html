@@ -533,8 +533,8 @@
     btn.className = 'quick-item';
     btn.textContent = p;
     btn.onclick = () => {
-      document.getElementById('prompt-input').value = p;
-      document.getElementById('prompt-input').focus();
+      socket.emit('send_prompt', p);
+      document.getElementById('close-btn').disabled = false;
     };
     ql.appendChild(btn);
   });
